@@ -15,7 +15,7 @@
 const unsigned long BASELINE_PERIOD_US = 62; 
 
 // --- YOUR VERIFIED SWEET SPOT LOCKED IN ---
-const unsigned long strobeIntervalUs = 53300; 
+const unsigned long strobeIntervalUs = 54200; 
 const int STROBE_FLASH_WIDTH_US = 200; 
 
 // --- INDEPENDENT MOTOR CLOCKS ---
@@ -84,4 +84,27 @@ void loop() {
     digitalWrite(STROBE_PIN, LOW);
     isStrobeActive = false;
   }
+
+  unsigned long actualStepInterval = currentMicros - lastStepTimeMotor2;
+
+  if (actualStepInterval >= BASELINE_PERIOD_US) {
+      stepState2 = !stepState2;
+      digitalWrite(PUL_PIN_2, stepState2);
+
+      // Calculate the exact delay overshoot for this step
+      unsigned long softwareOvershoot = actualStepInterval - BASELINE_PERIOD_US;
+
+      // Print it out every few thousand steps so it doesn't lag the loop
+      static int count = 0;
+      if (count++ > 2000) {
+         Serial.print("Software Latency per loop: "); 
+         Serial.print(softwareOvershoot); 
+         Serial.println(" us");
+         count = 0;
+      }
+
+      lastStepTimeMotor2 = currentMicros;
+  }
+  // Serial.println("Loop cycled!");
+  // Serial.println(currentMicros);
 }
