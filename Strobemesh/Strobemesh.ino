@@ -28,6 +28,8 @@ bool stepState1 = false;
 bool stepState2 = false;
 bool isStrobeActive = false;
 
+unsigned long currentMicros = micros();
+
 void setup() {
   pinMode(PUL_PIN_1, OUTPUT); pinMode(DIR_PIN_1, OUTPUT);
   pinMode(PUL_PIN_2, OUTPUT); pinMode(DIR_PIN_2, OUTPUT);
@@ -45,7 +47,6 @@ void setup() {
 }
 
 void loop() {
-  unsigned long currentMicros = micros();
 
   // =================================================================
   // ENGINE 1: MOTOR 2 (RMCS-1020) - ABSOLUTE CONSTANT
@@ -105,6 +106,4 @@ void loop() {
 
       lastStepTimeMotor2 = currentMicros;
   }
-  // Serial.println("Loop cycled!");
-  // Serial.println(currentMicros);
 }
