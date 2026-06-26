@@ -32,24 +32,6 @@ void loop() {
   unsigned long currentMicros = micros();
 
   // =================================================================
-  // 1. LIVE SERIAL INPUT COMMAND PARSER
-  // =================================================================
-  if (Serial.available() > 0) {
-    long incomingValue = Serial.parseInt();
-    
-    if (incomingValue == 0) {
-      manualStrobeIntervalUs = 0;
-      Serial.println("► Switched to: HARDWARE SYNC MODE (Auto-locking to motor steps)");
-    } 
-    else if (incomingValue >= 10000 && incomingValue <= 500000) {
-      manualStrobeIntervalUs = incomingValue;
-      Serial.print("► Switched to: MANUAL TIMING MODE. Strobe Length = ");
-      Serial.print(manualStrobeIntervalUs);
-      Serial.println(" us");
-    }
-  }
-
-  // =================================================================
   // 2. LIGHT TRIGGER SELECTOR
   // =================================================================
   if (manualStrobeIntervalUs == 0) {
