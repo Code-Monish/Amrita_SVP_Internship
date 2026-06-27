@@ -6,6 +6,8 @@
 #define DIR_PIN 7        // DIR+ on 2HSS57
 #define BLINK_PIN 13     // Onboard LED
 
+// pulseIn(uint8_t pin, uint8_t state, unsigned long timeout)
+
 // --- HARDWARE COORDINATE CONSTANTS ---
 const long MAX_TRACK_STEPS = 5905; // 600mm total padded travel line max
 const long ANGLE_45_COUNTS = 300;
