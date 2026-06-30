@@ -1,177 +1,193 @@
-// --- CONFIGURATION & PIN DEFINITIONS ---
-#define ENCODER_PIN_A 2  // Green wire (Pendulum)
-#define ENCODER_PIN_B 3  // White wire (Pendulum)
+// INVERTED PENDULUM DAMPER Module
 
-#define STEP_PIN 4       // PLS+ on 2HSS57
-#define DIR_PIN 7        // DIR+ on 2HSS57
-#define BLINK_PIN 13     // Onboard LED
+// PINOUT
+#define STEP_PIN 4
+#define DIR_PIN 7
 
-// --- UPDATED TIGHTER TRACK BOUNDARY CONSTANTS ---
-// 400mm total padded travel line = +/- 200mm from center
-// 200mm * 19.685 steps/mm = 3937 steps max allowed displacement
-const long MAX_TRACK_STEPS = 3937; 
+#define ENCODER_PIN_A 2 //Green wire
+#define ENCODER_PIN_B 3 //White wire
 
-// Inward-shifted destinations for the transit routine
-const long LEFT_ORIGIN = -2500;
-const long RIGHT_ORIGIN = 2500;
-const long ANGLE_45_COUNTS = 300;
+#define BLINK_PIN 13
 
-// --- HIGH-SPEED DAMPING & SHIFT PARAMETERS ---
-const int DAMP_SPEED_DELAY = 70;    // FAST: 70us delay for explosive acceleration
-const int DAMP_BURST_STEPS = 35;    // Snappy blocks for ultra-high loop refresh frequency
-const int TRANSIT_SPEED_DELAY = 80;  // High-velocity cruise between origins
+// GLOBAL VARIABLES
+int systemState = 0; // 0 Homing, 1 Transit, 2 Damping
+bool isSystemArmed = false;
+long lastMicros = 0;
 
-// --- SYSTEM STATE MACHINE ---
-enum SystemState { DAMPING, TRANSITING };
-SystemState currentState = DAMPING;
-long targetOrigin = LEFT_ORIGIN; 
+// position variables
+const long pivot_length = 350; //mm
+const long ORIGIN_PIVOT_STEPLEN = 19.685*pivot_length;
 
-// --- STATE TRACKING VARIABLES ---
+long currentPosition = 0;
+long TargetPosition = 0;
+
+// encoder variables
+volatile int encoderTicks = 0;
 volatile int lastEncoded = 0;
-volatile long pendulumCounts = 0; // 0 is dead straight down hanging vertical
-long lastPendulumCounts = 0;
-long cartStepPosition = 0; 
+long lastTicks = 0;
+unsigned long lastDamperMicros = 0;
+unsigned long lastPrintMillis = 0;
+float angularVelocity = 0;
+signed long angleError = 0;
+// const long QUARTER_ANGLE_COUNT = 300;
 
-// Velocity tracking for dead-still detection
-unsigned long lastVelocityCheckTime = 0;
-long positionAtLastCheck = 0;
+// damper variables
+float timeDiff = 0;
+float angleDiff = 0;
+unsigned long dampingStartingMicros = 0;
+long stepControlDelay = 0;
+unsigned long maxSpeedDelay = 25;
+unsigned long minSpeedDelay = 1000;
+const int Kp = 3.5;
+const int Ki = 0;
+const int Kd = 1.8;
 
-bool ledState = false;
-long lastBoundaryCrossed = 0;
-
-void setup() {
+void setup(){
   Serial.begin(115200);
-  
   pinMode(STEP_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
-  pinMode(BLINK_PIN, OUTPUT);
-  
+  // pinMode(BLINK_PIN, OUTPUT);
+
   digitalWrite(STEP_PIN, LOW);
   digitalWrite(DIR_PIN, LOW);
   digitalWrite(BLINK_PIN, LOW);
-  
+
   pinMode(ENCODER_PIN_A, INPUT_PULLUP);
   pinMode(ENCODER_PIN_B, INPUT_PULLUP);
-  
+
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A), updateEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B), updateEncoder, CHANGE);
-  
-  Serial.println("--- Tight-Boundary Micro-Angle Damper Online ---");
 }
 
-void loop() {
-  // 1. Snapshot encoder data safely
+
+void loop(){
+  unsigned long currentMicros = micros();
+  unsigned long currentMillis = millis();
+
+  // Homing logic (Manual set)
+  if (!isSystemArmed) {
+    if (encoderTicks <= -600){
+      delay(3000);
+
+      currentPosition = 0;
+      TargetPosition = 2000;
+      lastMicros = 0;
+
+      isSystemArmed = true;
+      systemState = 1;
+    }
+  }
+  else{
+    if (systemState == 1){
+      // Motor motion
+      if (currentPosition != TargetPosition){
+        if (currentMicros-lastMicros>200){
+          if (currentPosition < TargetPosition) {
+            digitalWrite(DIR_PIN, HIGH);
+            digitalWrite(STEP_PIN, HIGH);
+            delayMicroseconds(2);
+            digitalWrite(STEP_PIN, LOW);
+            currentPosition++;
+          } 
+          else {
+            digitalWrite(DIR_PIN, LOW);
+            digitalWrite(STEP_PIN, HIGH);
+            delayMicroseconds(2);
+            digitalWrite(STEP_PIN, LOW);
+            currentPosition--;
+          }
+          lastMicros = micros();
+        }
+      }
+      // Target Update
+      if (currentPosition == 2000){
+          systemState = 2;
+          TargetPosition =0;
+          dampingStartingMicros = micros();
+        } else if (currentPosition == 0) {
+          systemState = 2;
+          TargetPosition =2000;
+          dampingStartingMicros = micros();
+      }
+    }
+
+    // Damping and debug block
+    if (systemState == 2){
+      if (micros()-dampingStartingMicros >= 1500000){
+        systemState = 1;
+      } else if (currentMicros - lastDamperMicros >= 10000){
+        damper(currentMicros);  
+      }
+
+      if (currentMicros - lastMicros > stepControlDelay){
+        digitalWrite(STEP_PIN, HIGH);
+        delayMicroseconds(2); 
+        digitalWrite(STEP_PIN, LOW);
+      
+        Serial.print("Error: ");     Serial.print(angleError);
+        Serial.print(" | Velocity: ");  Serial.println(angularVelocity);
+        lastMicros = currentMicros;
+      }
+
+      // if (currentMillis - lastPrintMillis >= 100) {
+      //   lastPrintMillis = currentMillis;
+      // }
+
+      // lastPrintMillis = currentMillis;
+      // lastTicks = snapshotTicks;
+
+    }
+
+    
+  }
+  
+}
+
+void damper(unsigned long currentMicros){
   noInterrupts();
-  long currentAngle = pendulumCounts;
+  long snapshotTicks = encoderTicks;
+  // unsigned long currentMicros = micros();
   interrupts();
 
-  // --- LED INDICATOR AT MULTIPLES OF 45° ---
-  long currentSector = abs(currentAngle) / ANGLE_45_COUNTS;
-  if (currentSector != lastBoundaryCrossed) {
-    ledState = !ledState;
-    digitalWrite(BLINK_PIN, ledState);
-    lastBoundaryCrossed = currentSector;
+
+  // timeDiff = (currentMicros-lastDamperMicros)/1000000.0;
+  // if(timeDiff<=0){return;}
+  timeDiff = 10;
+
+  angleError = snapshotTicks;
+  angleDiff = (snapshotTicks - lastTicks)*0.15;
+  angularVelocity = angleDiff*1000/timeDiff;
+
+  float propotionalControlEffort = abs(angleError)*Kp;
+  float derivativeControlEffort = abs(angularVelocity)*Kd;
+  float totalControlEffort = propotionalControlEffort + derivativeControlEffort;
+
+  stepControlDelay = constrain(minSpeedDelay - totalControlEffort, maxSpeedDelay, minSpeedDelay);
+
+  lastTicks = snapshotTicks;
+  lastDamperMicros = currentMicros;
+
+  if (angularVelocity < 0){
+    digitalWrite(DIR_PIN, HIGH);
+  } else {
+    digitalWrite(DIR_PIN, LOW);
   }
 
-  // 2. Track rotational variables
-  long deltaAngle = currentAngle - lastPendulumCounts;
-
-  // =================================================================
-  // STATE 1: ACTIVE HIGH-SPEED MICRO-ANGLE DAMPING MODE
-  // =================================================================
-  if (currentState == DAMPING) {
-    
-    // CHANGED: Core Damping Window tightened down to a narrow range of -200 to 200 (+/- 30 degrees)
-    if (currentAngle >= -200 && currentAngle <= 200) {
-      
-      if (deltaAngle > 0 && abs(deltaAngle) > 1) {
-        // Pendulum is moving Clockwise -> Move RIGHT (HIGH) to run under the swing
-        executeSafeStep(HIGH, DAMP_BURST_STEPS, DAMP_SPEED_DELAY);
-      } 
-      else if (deltaAngle < 0 && abs(deltaAngle) > 1) {
-        // Pendulum is moving Counter-Clockwise -> Move LEFT (LOW) to cushion the swing
-        executeSafeStep(LOW, DAMP_BURST_STEPS, DAMP_SPEED_DELAY);
-      }
-    }
-
-    // --- DEAD STILL DETECTION LOOP ---
-    if (millis() - lastVelocityCheckTime > 80) {
-      long angularDisplacement = abs(currentAngle - positionAtLastCheck);
-      
-      // Tightened stability threshold: must stay within 40 counts of absolute dead center
-      if (angularDisplacement <= 2 && abs(currentAngle) < 40) {
-        // Switch targets and launch to the other side
-        if (targetOrigin == LEFT_ORIGIN) {
-          targetOrigin = RIGHT_ORIGIN;
-        } else {
-          targetOrigin = LEFT_ORIGIN;
-        }
-        currentState = TRANSITING;
-      }
-      
-      positionAtLastCheck = currentAngle;
-      lastVelocityCheckTime = millis();
-    }
-  }
-  // =================================================================
-  // STATE 2: METRO HIGH-SPEED TRANSIT TO NEW ORIGIN
-  // =================================================================
-  else if (currentState == TRANSITING) {
-    long distanceToTarget = targetOrigin - cartStepPosition;
-
-    if (abs(distanceToTarget) > 30) {
-      bool transitDirection = (distanceToTarget > 0) ? HIGH : LOW;
-      executeSafeStep(transitDirection, 40, TRANSIT_SPEED_DELAY);
-    } 
-    else {
-      // Destination reached! Sudden stop kicks off the new swing cycle.
-      currentState = DAMPING;
-      positionAtLastCheck = currentAngle;
-      lastVelocityCheckTime = millis();
-    }
-  }
-
-  lastPendulumCounts = currentAngle;
 }
 
-// Low-level step executor with independent absolute spatial guard rails
-void executeSafeStep(bool targetDirection, int stepsToTake, int pulseDelayMicros) {
-  digitalWrite(DIR_PIN, targetDirection);
-
-  for (int i = 0; i < stepsToTake; i++) {
-    // UPDATED: Rigid safety checks against the new 3937 step boundary limit
-    if (targetDirection == HIGH && cartStepPosition >= MAX_TRACK_STEPS) {
-      digitalWrite(STEP_PIN, LOW);
-      return; 
-    }
-    if (targetDirection == LOW && cartStepPosition <= -MAX_TRACK_STEPS) {
-      digitalWrite(STEP_PIN, LOW);
-      return; 
-    }
-
-    digitalWrite(STEP_PIN, HIGH);
-    delayMicroseconds(pulseDelayMicros);
-    digitalWrite(STEP_PIN, LOW);
-    delayMicroseconds(pulseDelayMicros);
-
-    if (targetDirection == HIGH) {
-      cartStepPosition++; 
-    } else {
-      cartStepPosition--; 
-    }
-  }
-}
-
-// --- HIGH-SPEED QUADRATURE INTERRUPT SERVICE ROUTINE ---
+// Interrupt Service Routine [Rotary encoder readings]
 void updateEncoder() {
-  int MSB = digitalRead(ENCODER_PIN_A); 
-  int LSB = digitalRead(ENCODER_PIN_B); 
-  
+  int MSB = (PIND & (1 << 2)) >> 2; // Most Significant Bit (Ch A)
+  int LSB = (PIND & (1 << 3)) >> 3; // Least Significant Bit (Ch B)
+
   int encoded = (MSB << 1) | LSB; 
   int sum = (lastEncoded << 2) | encoded; 
   
-  if(sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011) pendulumCounts++;
-  if(sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000) pendulumCounts--;
+  if (sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011) {
+    encoderTicks++;
+  } else if (sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000) {
+    encoderTicks--;
+  }
   
   lastEncoded = encoded; 
 }

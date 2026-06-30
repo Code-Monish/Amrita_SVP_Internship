@@ -22,8 +22,6 @@ void setup() {
   //on interrupt 0 (pin 2), or interrupt 1 (pin 3) 
   attachInterrupt(digitalPinToInterrupt(encoderPin1), updateEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoderPin2), updateEncoder, CHANGE);
-  // attachInterrupt(0, updateEncoder, CHANGE); 
-  // attachInterrupt(1, updateEncoder, CHANGE);
 
 }
 
