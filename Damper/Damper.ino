@@ -4,19 +4,19 @@
 #define STEP_PIN 4
 #define DIR_PIN 7
 
-#define ENCODER_PIN_A 2 //Green wire
-#define ENCODER_PIN_B 3 //White wire
+#define ENCODER_PIN_A 2  //Green wire
+#define ENCODER_PIN_B 3  //White wire
 
 #define BLINK_PIN 13
 
 // GLOBAL VARIABLES
-int systemState = 0; // 0 Homing, 1 Transit, 2 Damping
+int systemState = 0;  // 0 Homing, 1 Human Interaction Mode
 bool isSystemArmed = false;
 long lastMicros = 0;
 
 // position variables
-const long pivot_length = 350; //mm
-const long ORIGIN_PIVOT_STEPLEN = 19.685*pivot_length;
+const long pivot_length = 220;  //mm
+const long ORIGIN_PIVOT_STEPLEN = 9.847 * pivot_length;
 
 long currentPosition = 0;
 long TargetPosition = 0;
@@ -29,24 +29,22 @@ unsigned long lastDamperMicros = 0;
 unsigned long lastPrintMillis = 0;
 float angularVelocity = 0;
 signed long angleError = 0;
-// const long QUARTER_ANGLE_COUNT = 300;
 
 // damper variables
 float timeDiff = 0;
 float angleDiff = 0;
-unsigned long dampingStartingMicros = 0;
 long stepControlDelay = 0;
-unsigned long maxSpeedDelay = 25;
-unsigned long minSpeedDelay = 1000;
-const int Kp = 3.5;
-const int Ki = 0;
-const int Kd = 1.8;
+unsigned long maxSpeedDelay = 80;    // Calibrated for 800 p/r
+unsigned long minSpeedDelay = 1000;  // Snappy baseline crawl
 
-void setup(){
+const float Kp = 1.5;
+const float Ki = 0;
+const float Kd = 0.5;
+
+void setup() {
   Serial.begin(115200);
   pinMode(STEP_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
-  // pinMode(BLINK_PIN, OUTPUT);
 
   digitalWrite(STEP_PIN, LOW);
   digitalWrite(DIR_PIN, LOW);
@@ -60,134 +58,98 @@ void setup(){
 }
 
 
-void loop(){
+void loop() {
   unsigned long currentMicros = micros();
   unsigned long currentMillis = millis();
 
   // Homing logic (Manual set)
   if (!isSystemArmed) {
-    if (encoderTicks <= -600){
-      delay(3000);
+    if (encoderTicks <= -600) {
+      delay(5000);
 
       currentPosition = 0;
-      TargetPosition = 2000;
       lastMicros = 0;
 
       isSystemArmed = true;
-      systemState = 1;
+      systemState = 1;  // Transition straight into Interaction Mode
     }
-  }
-  else{
-    if (systemState == 1){
-      // Motor motion
-      if (currentPosition != TargetPosition){
-        if (currentMicros-lastMicros>200){
-          if (currentPosition < TargetPosition) {
-            digitalWrite(DIR_PIN, HIGH);
-            digitalWrite(STEP_PIN, HIGH);
-            delayMicroseconds(2);
-            digitalWrite(STEP_PIN, LOW);
-            currentPosition++;
-          } 
-          else {
-            digitalWrite(DIR_PIN, LOW);
-            digitalWrite(STEP_PIN, HIGH);
-            delayMicroseconds(2);
-            digitalWrite(STEP_PIN, LOW);
-            currentPosition--;
-          }
-          lastMicros = micros();
-        }
-      }
-      // Target Update
-      if (currentPosition == 2000){
-          systemState = 2;
-          TargetPosition =0;
-          dampingStartingMicros = micros();
-        } else if (currentPosition == 0) {
-          systemState = 2;
-          TargetPosition =2000;
-          dampingStartingMicros = micros();
-      }
-    }
-
-    // Damping and debug block
-    if (systemState == 2){
-      if (micros()-dampingStartingMicros >= 1500000){
-        systemState = 1;
-      } else if (currentMicros - lastDamperMicros >= 10000){
-        damper(currentMicros);  
+  } else {
+    if (systemState == 1) {
+      if (currentMicros - lastDamperMicros >= 10000) {
+        damper(currentMicros);
       }
 
-      if (currentMicros - lastMicros > stepControlDelay){
+      if (currentMicros - lastMicros > stepControlDelay) {
         digitalWrite(STEP_PIN, HIGH);
-        delayMicroseconds(2); 
+        delayMicroseconds(2);
         digitalWrite(STEP_PIN, LOW);
-      
-        Serial.print("Error: ");     Serial.print(angleError);
-        Serial.print(" | Velocity: ");  Serial.println(angularVelocity);
         lastMicros = currentMicros;
       }
 
-      // if (currentMillis - lastPrintMillis >= 100) {
-      //   lastPrintMillis = currentMillis;
-      // }
-
-      // lastPrintMillis = currentMillis;
-      // lastTicks = snapshotTicks;
-
+      if (currentMillis - lastPrintMillis >= 100) {
+        Serial.print("Error: ");
+        Serial.print(angleError);
+        Serial.print(" | Velocity: ");
+        Serial.println(angularVelocity);
+        lastPrintMillis = currentMillis;
+      }
     }
-
-    
   }
-  
 }
 
-void damper(unsigned long currentMicros){
+void damper(unsigned long currentMicros) {
   noInterrupts();
   long snapshotTicks = encoderTicks;
-  // unsigned long currentMicros = micros();
   interrupts();
 
+  // if (abs(angleError) <= 4) {
+  //   // Pendulum is close enough to center; relax the motor entirely
+  //   stepControlDelay = minSpeedDelay; 
+  //   angularVelocity = 0;
+  //   angleDiff = 0;
+  //   lastTicks = snapshotTicks; // Keep history updated so it doesn't spike on exit
+  //   return; // Exit the function early so no motor forces are computed
+  // }
 
-  // timeDiff = (currentMicros-lastDamperMicros)/1000000.0;
-  // if(timeDiff<=0){return;}
-  timeDiff = 10;
+  timeDiff = 10.0;  // Fixed 10ms tracking step
 
   angleError = snapshotTicks;
-  angleDiff = (snapshotTicks - lastTicks)*0.15;
-  angularVelocity = angleDiff*1000/timeDiff;
+  angleDiff = (snapshotTicks - lastTicks) * 0.15;     // Degrees
+  angularVelocity = (angleDiff * 1000.0) / timeDiff;  // Clean Deg/Sec
 
-  float propotionalControlEffort = abs(angleError)*Kp;
-  float derivativeControlEffort = abs(angularVelocity)*Kd;
-  float totalControlEffort = propotionalControlEffort + derivativeControlEffort;
+  // PD Control Law execution handling human induced force deflection
+  float proportionalControlEffort = abs(angleError) * Kp;
+  float derivativeControlEffort = abs(angularVelocity) * Kd;
+  float totalControlEffort = proportionalControlEffort + derivativeControlEffort;
 
+  // Map out inverse delay bounds safely
   stepControlDelay = constrain(minSpeedDelay - totalControlEffort, maxSpeedDelay, minSpeedDelay);
 
+  // History Updates
   lastTicks = snapshotTicks;
   lastDamperMicros = currentMicros;
 
-  if (angularVelocity < 0){
+  // Align direction with the physical fall context to resist or assist force
+  if (angleError < 0) {
     digitalWrite(DIR_PIN, HIGH);
   } else {
     digitalWrite(DIR_PIN, LOW);
   }
-
 }
 
 // Interrupt Service Routine [Rotary encoder readings]
 void updateEncoder() {
-  int MSB = (PIND & (1 << 2)) >> 2; // Most Significant Bit (Ch A)
-  int LSB = (PIND & (1 << 3)) >> 3; // Least Significant Bit (Ch B)
+  int MSB = (PIND & (1 << 2)) >> 2;
+  int LSB = (PIND & (1 << 3)) >> 3;
 
-  int encoded = (MSB << 1) | LSB; 
-  int sum = (lastEncoded << 2) | encoded; 
-  
+  int encoded = (MSB << 1) | LSB;
+  int sum = (lastEncoded << 2) | encoded;
+
   if (sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011) {
     encoderTicks++;
   } else if (sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000) {
     encoderTicks--;
   }
-  
-  lastEncoded = encoded; 
+
+  lastEncoded = encoded;
 }
