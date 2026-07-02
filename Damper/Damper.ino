@@ -1,4 +1,4 @@
-// INVERTED PENDULUM DAMPER Module
+// INVERTED PENDULUM : Damping Module
 
 // PINOUT
 #define STEP_PIN 4
@@ -16,7 +16,7 @@ long lastMicros = 0;
 
 // position variables
 const long pivot_length = 220;  //mm
-const long ORIGIN_PIVOT_STEPLEN = 9.847 * pivot_length;
+const long ORIGIN_PIVOT_STEPLEN = 9.847 * pivot_length; //19.658
 
 long currentPosition = 0;
 long TargetPosition = 0;
@@ -29,6 +29,13 @@ unsigned long lastDamperMicros = 0;
 unsigned long lastPrintMillis = 0;
 float angularVelocity = 0;
 signed long angleError = 0;
+
+// LED variables
+const long ANGLE_45_COUNTS = 300;
+long currentSector = 1; 
+long currentCounts = 0;
+long lastBoundaryCrossed = 0;
+bool ledState = false;
 
 // damper variables
 float timeDiff = 0;
@@ -59,6 +66,18 @@ void setup() {
 
 
 void loop() {
+  noInterrupts();
+  currentCounts = encoderTicks;
+  interrupts();
+
+  currentSector = abs(currentCounts)/ANGLE_45_COUNTS;
+
+  if (currentSector != lastBoundaryCrossed){
+    ledState = !ledState;
+    digitalWrite(BLINK_PIN, ledState);
+    lastBoundaryCrossed = currentSector;
+  }
+
   unsigned long currentMicros = micros();
   unsigned long currentMillis = millis();
 
@@ -102,20 +121,21 @@ void damper(unsigned long currentMicros) {
   long snapshotTicks = encoderTicks;
   interrupts();
 
-  // if (abs(angleError) <= 4) {
-  //   // Pendulum is close enough to center; relax the motor entirely
-  //   stepControlDelay = minSpeedDelay; 
-  //   angularVelocity = 0;
-  //   angleDiff = 0;
-  //   lastTicks = snapshotTicks; // Keep history updated so it doesn't spike on exit
-  //   return; // Exit the function early so no motor forces are computed
-  // }
 
   timeDiff = 10.0;  // Fixed 10ms tracking step
 
   angleError = snapshotTicks;
   angleDiff = (snapshotTicks - lastTicks) * 0.15;     // Degrees
   angularVelocity = (angleDiff * 1000.0) / timeDiff;  // Clean Deg/Sec
+
+  if (abs(angleError) <= 4) {
+    // Pendulum is close enough to center; relax the motor entirely
+    stepControlDelay = minSpeedDelay; 
+    angularVelocity = 0;
+    angleDiff = 0;
+    lastTicks = snapshotTicks; // Keep history updated so it doesn't spike on exit
+    return; // Exit the function early so no motor forces are computed
+  }
 
   // PD Control Law execution handling human induced force deflection
   float proportionalControlEffort = abs(angleError) * Kp;
